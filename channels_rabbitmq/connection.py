@@ -12,10 +12,18 @@ from channels.exceptions import ChannelFull
 
 logger = logging.getLogger(__name__)
 
-
-GroupsExchange = "groups"
 ReconnectDelay = 1.0  # seconds
 
+def routing_group(group, prefix=None):
+    """
+    RabbitMQ routing keys should be in the format of <A>.<B>
+    This allows for wildcards suchas "groups.*" for queues connected to
+    topic exchanges
+    """
+    if prefix is not None:
+        return prefix + '.' + group
+    else:
+        return group
 
 def serialize(body):
     """
@@ -336,6 +344,7 @@ class Connection:
         expiry=60,
         group_expiry=86400,
         connection_options={},
+        exchange_options={}
     ):
         self.loop = loop
         self.host = host
@@ -346,6 +355,12 @@ class Connection:
         self.group_expiry = group_expiry
         self.queue_name = queue_name
         self.connection_options = connection_options
+        self.exchange_options = { 
+            'name': 'groups', 
+            'type': 'direct', 
+            'routing_prefix': 'groups', 
+            **exchange_options,
+        }
 
         # incoming_messages: await `get()` on any channel-name queue to receive
         # the next message. If the `get()` is canceled, that's probably because
@@ -450,7 +465,7 @@ class Connection:
 
         # Declare "groups" exchange. It may persist; spurious declarations
         # (such as on reconnect) are harmless.
-        await channel.exchange_declare(GroupsExchange, "direct")
+        await channel.exchange_declare(self.exchange_options["name"], self.exchange_options["type"])
 
         # Queue up the handling of messages.
         #
@@ -488,7 +503,9 @@ class Connection:
             await gather_without_leaking(
                 [
                     channel.queue_bind(
-                        self.queue_name, GroupsExchange, routing_key=group
+                        self.queue_name, 
+                        self.exchange_options["name"], 
+                        routing_key=routing_group(group, self.exchange_options["routing_prefix"])
                     )
                     for group in groups
                 ]
@@ -640,7 +657,9 @@ class Connection:
                 # This group is new to our connection-level queue. Make a
                 # connection-level binding.
                 await channel.queue_bind(
-                    self.queue_name, GroupsExchange, routing_key=group
+                    self.queue_name, 
+                    self.exchange_options["name"], 
+                    routing_key=routing_group(group, self.exchange_options["routing_prefix"])
                 )
 
     async def group_discard(self, group, asgi_channel):
@@ -662,7 +681,9 @@ class Connection:
                 logger.debug("Unbinding queue %s from group %s", self.queue_name, group)
                 # Disconnect, if we're connected.
                 await self._channel.queue_unbind(
-                    self.queue_name, GroupsExchange, routing_key=group
+                    self.queue_name, 
+                    self.exchange_options["name"], 
+                    routing_key=routing_group(group, self.exchange_options["routing_prefix"])
                 )
 
     @stall_until_connected_or_closed
@@ -673,7 +694,11 @@ class Connection:
         logger.debug("group_send %r to %s", message, group)
 
         try:
-            await channel.publish(message, GroupsExchange, routing_key=group)
+            await channel.publish(
+                message, 
+                self.exchange_options["name"], 
+                routing_key=routing_group(group, self.exchange_options["routing_prefix"])
+            )
         except PublishFailed:
             # The Channels protocol has no way of reporting this error.
             # Just silently delete the message.

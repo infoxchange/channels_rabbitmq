@@ -81,6 +81,12 @@ accelerate throughput a little bit; lower settings help adhere to
 A dictionary of values that will be passed as kwargs when aioamqp attempts
 to connect to the RabbitMQ server.
 
+``exchange_options``
+~~~~~~~~~~~~~~~~~~
+
+A dictionary of values that will be merged with the default exchange options.
+exchange_options: { name: 'groups', type: 'direct', routing_prefix: 'groups' }
+
 Design decisions
 ----------------
 
